@@ -1,0 +1,430 @@
+{
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {}
+  ##############################################################################################
+########## Loice - Health Information                 ########################################
+#### List of Health Facilities in Kisumu              ########################################
+## Data sources                                       ########################################
+### Kenya Health Facilities: https://hub.arcgis.com/datasets/Esri-EA::health-facilities-in-kenya/explore?location=0.387809%2C37.922928%2C6.00&showTable=true ############
+##############################################################################################
+
+
+##############################################################################################
+## Prepare the working directories and libraries to be used.
+## install.packages("readxl")
+
+library(readxl)
+library(tidyverse)
+library(rvest)
+library(sf)
+library(ggmap)
+library("ggspatial")
+##############################################################################################
+##############################################################################################
+
+### Change the working Directory (folder)
+setwd("C:/Users/LOICE/Documents/PhD Live Simulation/kenyan-counties")
+
+for(img in 1:10){ ## Loop 500 times (all codes to line 227)
+  ##############################################################################################
+  ## Read in and extract the health facilities for Kisumu
+## To run once, start from line 29 to 266
+  Health_facilities <- read_csv("Health_Facilities_in_Kenya.csv",show_col_types = FALSE)
+  Kisumu_HF<-Health_facilities %>%
+    filter(District=="KISUMU")
+  
+  Kisumu_HF$Facility_Type<-""
+  
+  ## Classify the type of hospital
+  for(i in 1:nrow(Kisumu_HF)){
+    clinic<-str_locate_all(pattern ='CLINIC', Kisumu_HF$F_NAME[i])[[1]][1]
+    hosp<-str_locate_all(pattern ='HOSPITAL', Kisumu_HF$F_NAME[i])[[1]][1]
+    hosp2<-str_locate_all(pattern ='HOSP', Kisumu_HF$F_NAME[i])[[1]][1]
+    NH<-str_locate_all(pattern ='HOME', Kisumu_HF$F_NAME[i])[[1]][1]
+    disp<-str_locate_all(pattern ='DISP', Kisumu_HF$F_NAME[i])[[1]][1]
+    hc<-str_locate_all(pattern = 'HEALTH CENTRE', Kisumu_HF$F_NAME[i])[[1]][1]
+    hc2<-str_locate_all(pattern = 'HC', Kisumu_HF$F_NAME[i])[[1]][1]
+    rhtc<-str_locate_all(pattern = 'RHTC', Kisumu_HF$F_NAME[i])[[1]][1]
+    
+    if(!is.na(clinic) & clinic > 0){
+      Kisumu_HF$Facility_Type[i]<-"Clinic"
+    } else if((!is.na(hosp) & hosp > 0) | (!is.na(hosp2) & hosp2 > 0) ){
+      Kisumu_HF$Facility_Type[i]<-"Hospital"
+    } else if(!is.na(NH) & NH > 0){
+      Kisumu_HF$Facility_Type[i]<-"Nursing Home"
+    } else if(!is.na(disp) & disp > 0){
+      Kisumu_HF$Facility_Type[i]<-"Dispensary"
+    } else if((!is.na(hc) & hc > 0) | (!is.na(hc2) & hc2 > 0)){
+      Kisumu_HF$Facility_Type[i]<-"Health Centre"
+    } else if(!is.na(rhtc) & rhtc > 0){
+      Kisumu_HF$Facility_Type[i]<-"RHTC"
+    }
+    Kisumu_HF$F_NAME[i]<-str_trim(str_to_title(gsub(str_to_upper(Kisumu_HF$Facility_Type[i]), "",Kisumu_HF$F_NAME[i])))
+  }
+  
+  ## Select only the important variables
+  Kisumu_HF<-Kisumu_HF %>%
+    select(F_NAME,Latitude,Longitude,Facility_Type)
+  Kisumu_HF2<-Kisumu_HF
+  ##############################################################################################
+  ##############################################################################################
+  
+  ##############################################################################################
+  ############ Get the input
+  ### All services on offer
+  ## Assumption: Hospitals of the same type offer similar services
+  
+  # Dispensary Services; Source: https://www.google.com/search?q=services+offered+in+a+Dispensary&ei=PqikYaiRJKWFxc8Pmd6wQA&ved=0ahUKEwioqNTBq730AhWlQvEDHRkvDAgQ4dUDCA4&uact=5&oq=services+offered+in+a+Dispensary&gs_lcp=Cgdnd3Mtd2l6EAMyCAgAEIAEEMkDOgcIABBHELADOgUIABCABDoGCAAQFhAeSgQIQRgAUJ0GWLkZYMocaAJwAngAgAGGAogBwRGSAQQyLTEwmAEAoAEByAEIwAEB&sclient=gws-wiz
+  dispServices<-c("Outpatient", "VCT","Tuberculosis","Laboratory","Well baby Clinics","ANC","PNC","Counselling")
+  
+  # Clinic Services; Source: https://www.google.com/search?q=services+offered+in+a+Clinic&ei=_qekYZf5CcaVxc8PyLWdwAk&ved=0ahUKEwiX8Peiq730AhXGSvEDHchaB5gQ4dUDCA4&uact=5&oq=services+offered+in+a+Clinic&gs_lcp=Cgdnd3Mtd2l6EAMyBQgAEIAEMgYIABAWEB4yCQgAEMkDEBYQHjoHCAAQRxCwAzoICAAQgAQQyQNKBAhBGABQ3wRY_g1g2w9oAXACeACAAYoCiAGxC5IBAzItNpgBAKABAcgBCMABAQ&sclient=gws-wiz
+  clinServices<-c("Cancer","Nutritional Care")
+  
+  # Health Centre Services; Source: https://www.google.com/search?q=services+offered+in+a+Health+Centre&ei=46ekYZ--NtqHxc8P-L-36AU&ved=0ahUKEwjfu7SWq730AhXaQ_EDHfjfDV0Q4dUDCA4&uact=5&oq=services+offered+in+a+Health+Centre&gs_lcp=Cgdnd3Mtd2l6EAMyBQghEKABOgcIABBHELADOgUIABCABDoICAAQgAQQyQM6BggAEBYQHjoJCAAQyQMQFhAeOggIIRAWEB0QHjoHCCEQChCgAToECCEQCkoECEEYAFCBF1jcK2C3LmgFcAJ4AIABjgKIAcYZkgEEMi0xNJgBAKABAcgBCMABAQ&sclient=gws-wiz
+  HealthCentresServ<- c("Nursing services","Dental","Audiology", "Dietetics", 
+                        "Physiology", "Physiotherapy", "Podiatry","Occupational therapy")
+  
+  # Hospital Services; Source: https://www.hss.gov.nt.ca/en/services/nwt-health-care-plan/hospital-services
+  hospServices<-c("Ward care","Nursing services","Laboratory", "X-ray",
+                  "Minor Surgery","Major Surgery","Radiotherapy","Occupational therapy","Physiotherapy",
+                  "Detoxification","Dental","Drug rehabilitation")
+  
+  # Nursing Home Services; Source: https://www.google.com/search?q=services+offered+in+an+Nursing+Home&ei=D6ekYYGoHfuMxc8P4d-ACA&ved=0ahUKEwjB64-xqr30AhV7RvEDHeEvAAEQ4dUDCA4&uact=5&oq=services+offered+in+an+Nursing+Home&gs_lcp=Cgdnd3Mtd2l6EAMyBggAEA0QHjoHCAAQRxCwAzoFCCEQoAE6CAghEBYQHRAeOgYIABAWEB5KBAhBGABQlRJY0SBgoCJoA3ACeAGAAeADiAHQG5IBBzItNi4zLjKYAQCgAQHIAQjAAQE&sclient=gws-wiz
+  NursingServices<-"Nursing services"
+  
+  # RHTC services; Source: https://www.srmist.edu.in/content/services-provided-rural-urban-health-training-centres
+  rhtcServices<-c("Outpatient","Minor Surgery","ANC","PNC","Laboratory")
+  
+  AllServices<-unique(c(dispServices,clinServices,HealthCentresServ,hospServices,NursingServices,rhtcServices))
+  AllServices<-AllServices[order(AllServices)]
+  ##############################################################################################
+  ############ Get the input
+  ## 1. Enter the longitude and latitude (randomize PEO)
+  Long<-runif(n=1,min=min(Kisumu_HF$Longitude,na.rm=TRUE),max=max(Kisumu_HF$Longitude,na.rm=TRUE));Long
+  Lat<-runif(n=1,min=min(Kisumu_HF$Latitude,na.rm=TRUE),max=max(Kisumu_HF$Latitude,na.rm=TRUE));Lat
+  
+  ## 2 Enter the type of injury (randomize)
+  # Injury=c("General","Pediatric","Neurology","Maternity","Bone fractures","Muscle ijuries","Asthmic","Gynecologist")
+  Emergency<-AllServices[round(runif(n=1,1,length(AllServices)),0)]
+  Emergency
+  ##############################################################################################
+  ##############################################################################################
+  
+  
+  ##############################################################################################
+  ##############################################################################################
+  ################## ALGORITHM
+  
+  ## Calculate the Distance from PEO to all the Health Facilities in the dataset
+  ## Note that a change in degrees is = 111.19 KM change
+  Kisumu_HF$Distance<-round(sqrt(((Kisumu_HF$Latitude-Lat)*111.19)^2+
+                                   ((Kisumu_HF$Longitude-Long)*111.18)^2),1)
+  Kisumu_HF2$Distance<-round(sqrt(((Kisumu_HF2$Latitude-Lat)*111.19)^2+
+                                    ((Kisumu_HF2$Longitude-Long)*111.18)^2),1)
+  ##############################################################################################
+  ##############################################################################################
+  # View(Kisumu_HF) # To view the data file in Spreadsheet format
+  
+  ##############################################################################################
+  ## Calculate time taken to reach the hospital 
+  ## Assume speed of it takes 2.5 min to cover a KM
+  Kisumu_HF<- Kisumu_HF %>% 
+    mutate(TimeTaken = 2.5*Distance)
+  Kisumu_HF2<- Kisumu_HF2 %>% 
+    mutate(TimeTaken = 2.5*Distance)
+  ##############################################################################################
+  ##############################################################################################
+  
+  
+  ##############################################################################################
+  ## Calculate Waiting Time per type of Health Facility 
+  Kisumu_HF$WaitingTime <- numeric(nrow(Kisumu_HF))
+  Kisumu_HF2$WaitingTime <- numeric(nrow(Kisumu_HF2))
+  HospType1<-unique(Kisumu_HF$Facility_Type)
+  HospTime<-c(50,30,15,20,15,15)
+  for( i in 1:length(HospType1)){
+    Kisumu_HF$WaitingTime<-ifelse(Kisumu_HF$Facility_Type == HospType1[i],HospTime[i],Kisumu_HF$WaitingTime)
+    Kisumu_HF2$WaitingTime<-ifelse(Kisumu_HF2$Facility_Type == HospType1[i],HospTime[i],Kisumu_HF2$WaitingTime)
+  }
+  ##############################################################################################
+  ##############################################################################################
+  
+  
+  ##############################################################################################
+  ## Input the waiting time for each hospital
+  ##	Case 1: - Service is available
+  
+  ## Subset types of hospitals with the service
+  CentresOfferingService<-function(Emergency){
+    Emergency<-Emergency
+    CentresOffering<-character()
+    
+    if(Emergency %in% dispServices){
+      CentresOffering<-c(CentresOffering,"Dispensary")
+    } else { CentresOffering <- CentresOffering}
+    if(Emergency %in% clinServices){
+      CentresOffering<-c(CentresOffering,"Clinic")
+    } else { CentresOffering <- CentresOffering}
+    if(Emergency %in% HealthCentresServ){
+      CentresOffering<-c(CentresOffering,"Health Centre")
+    } else { CentresOffering <- CentresOffering}
+    if(Emergency %in% hospServices){
+      CentresOffering<-c(CentresOffering,"Hospital")
+    } else { CentresOffering <- CentresOffering}
+    if(Emergency %in% NursingServices){
+      CentresOffering<-c(CentresOffering,"Nursing Home")
+    } else { CentresOffering <- CentresOffering}
+    if(Emergency %in% rhtcServices){
+      CentresOffering<-c(CentresOffering,"RHTC")
+    } else { CentresOffering <- CentresOffering}
+    
+    return(CentresOffering)
+  }
+  CentresOffering<-CentresOfferingService(Emergency) #Function used
+  
+  
+  case1<-function(Kisumu_HF,CentresOffering){
+    Kisumu_HF<-Kisumu_HF %>%
+      filter(Facility_Type %in% CentresOffering)
+    ### 1.	Calculate a ten-minute waiting time to get means of transport
+    ### 2.	Calculate the time taken to reach hospital
+    ### 3.	Calculate waiting time by type of service
+    ### a.	Add the times taken
+    
+    Kisumu_HF$OptimalTime <- 10+Kisumu_HF$TimeTaken+Kisumu_HF$WaitingTime
+    
+    #Select the minimal time:
+    OptimalHospital<-Kisumu_HF[which.min(Kisumu_HF$OptimalTime),]
+    
+    return(OptimalHospital)
+  }
+  
+  OptimalHospital<-case1(Kisumu_HF,CentresOffering);OptimalHospital
+  
+  ##############################################################################################
+  ##############################################################################################
+  ## ii.	Case 2: Service not available
+  
+  case2P1<-function(Kisumu_HF2){
+    ##  1. Calculate a ten-minute waiting time to get means of transport (10)
+    ##  2.	Calculate the time taken to reach hospital (X min)
+    ##  3.	Calculate average waiting time for the hospital (Y min)
+    
+    Kisumu_HF2$OptimalTime <-10+Kisumu_HF2$TimeTaken+Kisumu_HF2$WaitingTime
+    
+    #Select the minimal time:
+    FirstChoice<-Kisumu_HF2[which.min(Kisumu_HF2$OptimalTime),]
+    
+    return(FirstChoice)
+  }
+  
+  FirstPick<-case2P1(Kisumu_HF2)
+  ##############################################################################################
+  ##############################################################################################
+  
+  ##############################################################################################
+  ### When the first hospital does not have the service
+  case2P2<-function(FirstPick){
+    ## Check if the first choice has the service of emergency
+    `%notin%` <- negate(`%in%`)
+    if(FirstPick$Facility_Type %notin% CentresOffering){
+      Centres2<-CentresOfferingService(Emergency)
+      
+      ### Recalculate Distance
+      Kisumu_HF2$Distance<-round(sqrt(((Kisumu_HF2$Latitude-FirstPick$Latitude)*111.19)^2+
+                                        ((Kisumu_HF2$Longitude-FirstPick$Longitude)*111.18)^2),1)
+      Kisumu_HF2<- Kisumu_HF2 %>% 
+        mutate(TimeTaken = 2.5*Distance)
+      
+      ### Use similar method to get the file
+      
+      SecondHospital<-case1(Kisumu_HF2,CentresOffering)
+      
+      return(SecondHospital)
+    } else {
+      SecondHospital<-OptimalHospital
+    }
+  }
+  
+  SecondHosp<-case2P2(FirstPick)
+  ##############################################################################################
+  ##############################################################################################
+  
+  ##############################################################################################
+  ### Merge the Datasets - for eventual plotting
+  OptimalHospital$Times<-"Optimal"
+  FirstPick$Times<-"First"
+  SecondHosp$Times<-"Second"
+  POE<-OptimalHospital
+  POE$Times<-"POE"
+  POE$Latitude<-Lat
+  POE$Longitude<-Long
+  OutputData<-rbind(OptimalHospital,FirstPick,SecondHosp,POE)
+  
+  OptimalHospital2<-cbind(POE[,c(2,3)],OptimalHospital[,c(2,3,8)])
+  names(OptimalHospital2)<-c("Lat1", "Long1","Lat2","Long2","OptimalTime")
+  FirstHospital2<-cbind(POE[,c(2,3)],FirstPick[,c(2,3,8)])
+  names(FirstHospital2)<-c("Lat1", "Long1","Lat2","Long2","OptimalTime")
+  SecondHosp<-cbind(FirstPick[,c(2,3)],SecondHosp[,c(2,3,8)])
+  names(SecondHosp)<-c("Lat1", "Long1","Lat2","Long2","OptimalTime")
+   
+  ## Merging the data for use in calculating summaries
+  if(img==1){
+    OutputDataCombined<-OutputData #### Run this line alone if you're not looping; skip to 291
+    OutputDataCombined$Round<-img
+  } else {
+    OutputDataWorking<-OutputData
+    OutputDataWorking$Round<-img
+    OutputDataCombined<-rbind(OutputDataCombined,OutputDataWorking)
+  }
+ 
+}
+
+  ##############################################################################################
+  ##############################################################################################
+  ##############################################################################################
+  ##############################################################################################
+  ##############################################################################################
+  ##############################################################################################
+  ##############################################################################################
+  ##############################################################################################
+  
+##############################################################################################
+## Mapping Data
+KenyaCounties_sf <-  st_read("C:/Users/LOICE/Documents/PhD Live Simulation/kenyan-counties/County.shp", quiet = FALSE)
+Kisumu_sf<-KenyaCounties_sf[KenyaCounties_sf$COUNTY=="Kisumu",]
+
+##############################################################################################
+################ Plotting the Medical facilities in Kisumu, by type
+## Png command is for saving data to a png file
+#png("C:/Users/LOICE/Documents/PhD Live Simulation/kenyan-counties/Images/01_Medical_Facilities.png", width = 1000, height = 800,units="px")
+ggplot() +
+  geom_sf(data=Kisumu_sf,fill=NA,color=alpha("brown")) +
+  geom_point(data = Kisumu_HF, mapping = aes(x = Longitude, y = Latitude,color=factor(Facility_Type)),size=4) +
+  theme_classic() +
+  theme(axis.text = element_text(size=12),axis.title = element_text(size=14),
+        title = element_text(size=14))+
+  labs(title="Medical Facilities in Kisumu County",col="Facility Type",size=12) + 
+  annotation_scale(location = "bl", width_hint = 0.5) +
+  annotation_north_arrow(location = "bl", which_north = "true", 
+                         pad_x = unit(0.75, "in"), pad_y = unit(0.5, "in"),
+                         style = north_arrow_fancy_orienteering) 
+#dev.off() # End the plotting
+##############################################################################################
+##############################################################################################
+
+
+OutputDataCombined$F_NAME<-ifelse(OutputDataCombined$Times=="POE","",OutputDataCombined$F_NAME)
+OutputDataCombined$Facility_Type<-ifelse(OutputDataCombined$Times=="POE","",OutputDataCombined$Facility_Type)
+OutputDataCombined$Distance<-ifelse(OutputDataCombined$Times=="POE",NA,OutputDataCombined$Distance)
+OutputDataCombined$TimeTaken<-ifelse(OutputDataCombined$Times=="POE",NA,OutputDataCombined$TimeTaken)
+OutputDataCombined$WaitingTime<-ifelse(OutputDataCombined$Times=="POE",NA,OutputDataCombined$WaitingTime)
+OutputDataCombined$OptimalTime<-ifelse(OutputDataCombined$Times=="POE",NA,OutputDataCombined$OptimalTime)
+OutputDataCombined$Times<-ifelse(OutputDataCombined$Times=="POE","PEO",OutputDataCombined$Times)
+# View(OutputDataCombined) #Select without hash tag to view data frame
+OutputDataCombined
+
+##### Optimal analysis
+# tail(OutputDataCombined)
+
+## Get the optimal time for each round
+HarzardAnalysis<-OutputDataCombined %>%
+  filter(Times=="Optimal") %>%
+  select(Round,OptimalTime)
+# View(HarzardAnalysis)
+
+## Get the first time for each round, and merge to the optimal time in HarzardAnalysis
+HarzardAnalysis<-merge(HarzardAnalysis,OutputDataCombined %>%
+  filter(Times=="First") %>%
+  mutate(FirstTime=OptimalTime) %>%
+  select(Round,FirstTime),
+  by.x = "Round", by.y = "Round")
+
+## Get the second time for each round, and merge to the optimal and first time in HarzardAnalysis
+HarzardAnalysis<-merge(HarzardAnalysis,OutputDataCombined %>%
+                  filter(Times=="Second") %>%
+                  mutate(SecondTime=OptimalTime) %>%
+                  select(Round,SecondTime),
+                by.x = "Round", by.y = "Round")
+
+
+## Convert second time to zero if first time was optimal
+HarzardAnalysis$SecondTime<-ifelse(HarzardAnalysis$OptimalTime==HarzardAnalysis$FirstTime,0,HarzardAnalysis$SecondTime)
+
+## Calculates total time spent, and the difference in minutes spent (how many more minutes no optimal sill use to get service)
+HarzardAnalysis<-HarzardAnalysis %>%
+  mutate(Totals = FirstTime+SecondTime) %>%
+  mutate(Risks = Totals<=OptimalTime) %>%
+  mutate(Diffs = Totals-OptimalTime)
+
+#unique(OutputDataCombined$Times)
+
+##############################################################################################
+################ Plotting the PEO simulated
+## Skip the line with png command so as to use the viewer
+##png("C:/Users/LOICE/Documents/PhD Live Simulation/kenyan-counties/Images/02_PEO.png", width = 1000, height = 800,units="px")
+OutputDataCombined %>%
+  filter(Times == "PEO") %>%
+  select(Latitude,Longitude) %>%
+  ggplot() +
+  geom_sf(data=Kisumu_sf,fill=NA,color=alpha("brown")) +
+  geom_point(mapping = aes(x = Longitude, y = Latitude),color=alpha("grey",0.8),size=4) +
+  theme_classic() +
+  theme(axis.text = element_text(size=12),axis.title = element_text(size=14),
+        title = element_text(size=14),legend.position = "none")+
+  labs(title="Simulated Points of Emergency Occurrence (500 points)",size=12) + 
+  annotation_scale(location = "bl", width_hint = 0.5) +
+  annotation_north_arrow(location = "bl", which_north = "true", 
+                         pad_x = unit(0.75, "in"), pad_y = unit(0.5, "in"),
+                         style = north_arrow_fancy_orienteering) 
+##dev.off()
+##############################################################################################
+##############################################################################################
+
+
+##############################################################################################
+################ Plot the Optimization
+##png("C:/Users/LOICE/Documents/PhD Live Simulation/kenyan-counties/Images/03_Illustration_Optimal.png", width = 1000, height = 800,units="px")
+OutputData$Times<-ifelse(OutputData$Times=="Second","",OutputData$Times)
+OutputData$Times<-ifelse(OutputData$Times=="POE","PEO",OutputData$Times)
+ggplot() +
+  geom_sf(data=Kisumu_sf,fill=NA,color=alpha("brown")) +
+  geom_point(data = Kisumu_HF, mapping = aes(x = Longitude, y = Latitude),color=alpha("grey",0.8),size=4) +
+  geom_point(data = OutputData, mapping = aes(x = Longitude, y = Latitude),size=4) +
+  geom_segment(aes(x = Long1, y = Lat1, xend = Long2, yend = Lat2, colour = "green"),size=2, data = OptimalHospital2)+
+  geom_segment(aes(x = Long1, y = Lat1, xend = Long2, yend = Lat2, colour = "blue"),size=2, data = FirstHospital2)+
+  geom_segment(aes(x = Long1, y = Lat1, xend = Long2, yend = Lat2, colour = "red"),size=2, data = SecondHosp)+
+  geom_text(data = OutputData,mapping = aes(x = Longitude, y = Latitude,label=Times),hjust=0, vjust=0)+
+  theme_classic() +
+  theme(axis.text = element_text(size=12),axis.title = element_text(size=14),
+        title = element_text(size=14),legend.position = "none")+
+  labs(title="Optimal Vs. Standard Health Seeking time in case of emergency in Kisumu County",col="Facility Type",size=12) + 
+  annotation_scale(location = "bl", width_hint = 0.5) +
+  annotation_north_arrow(location = "bl", which_north = "true", 
+                         pad_x = unit(0.75, "in"), pad_y = unit(0.5, "in"),
+                         style = north_arrow_fancy_orienteering) 
+##dev.off()
+##############################################################################################
+##############################################################################################
+
+### Instances where the optimal Medical facility was also the first option
+paste("There were ",HarzardAnalysis %>%
+        summarise(HarzardAnalysis = sum(Risks))," times when the first choice was also optimal",sep="")
+paste("This is equivalent to ",round(HarzardAnalysis %>%
+                                       summarise(HarzardAnalysisPercentage = sum(Risks))*100/nrow(HarzardAnalysis),1),"% of the time",sep="")
+paste("This means that ",100-round(HarzardAnalysis %>%
+                                     summarise(HarzardAnalysisPercentage = sum(Risks))*100/nrow(HarzardAnalysis),1),
+      "% of the time, the best option to use is the Optimized AI Algorithm",sep="")
+
+### It is clear that in all instances, the optimal option was better
+## Works with the remaining percentage where the Optimized AI Algorithm was a better option
+### Gives a summary of extra minutes the person using the non optimized method would spend before being attended to
+HarzardAnalysis %>%
+  filter(Diffs>0) %>%
+  summarise(MinDiff = min(Diffs),MaxDiff = max(Diffs), 
+            AvgDiff = round(mean(Diffs),2),medDiff = round(median(Diffs),2))
+
+# Half of the time, the difference in time between optimal time and the standard methods
+# was 30 min
+
+}
